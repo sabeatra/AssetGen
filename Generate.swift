@@ -1,8 +1,7 @@
 import Foundation
 
-enum GenerationError: Error {
-    case colorJson
-}
+private let shouldOptimizeByDate = false
+
 
 private func fileModificationDate(url: URL) -> Date? {
     do {
@@ -13,93 +12,117 @@ private func fileModificationDate(url: URL) -> Date? {
     }
 }
 
-private func colorFromJson(url: URL) throws -> String {
-    let data = try Data(contentsOf: url)
-    
-    struct Components: Decodable {
-        let red: String
-        let blue: String
-        let green: String
-        let alpha: String
-    }
+private var header: String {
+    get {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .short
+        dateFormatter.timeStyle = .short
+        let date = dateFormatter.string(from: Date())
 
-    struct ColorDescriptor: Decodable {
-        let components: Components
+        return  """
+                //Generated file, don't modify!
+                //Generated on \(date)
+                import Foundation
+                private class Dummy {}
+                """
     }
-    struct ColorPayload: Decodable {
-        let color: ColorDescriptor
-    }
-    struct Payload: Decodable {
-        let colors: [ColorPayload]
-    }
-    let payload = try JSONDecoder().decode(Payload.self, from: data)
-    guard let components = payload.colors.first?.color.components else { throw GenerationError.colorJson }
-    let hex = components.red + [components.green, components.blue].map({ $0.replacingOccurrences(of: "0x", with: "") }).joined()
-    return "UIColor(rgb: \(hex), alpha: \(components.alpha)"
 }
 
-
-private func generateColors(folders: [URL], sourceURL: URL) throws {
+private func generateColors(colorNames: [String], outputURL: URL) throws {
     print("Generating colors...")
     
-    let colorList: [String] = try folders.map { url in
-        let fileURL = url.appendingPathComponent("Contents.json")
-        let colorString = try colorFromJson(url: fileURL)
-        let colorName = url.deletingPathExtension().lastPathComponent
-        return "public static let \(colorName) = \(colorString))"
-    }
+    let colorList = colorNames.map { "public static let \($0) = color(named: \"\($0)\")" }
     
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateStyle = .short
-    dateFormatter.timeStyle = .short
-    let date = dateFormatter.string(from: Date())
-    
-    let source = """
-//Generated file, don't modify!
-//Generated on \(date)
-import Foundation
-    
-public struct Color {
-    \(colorList.joined(separator: "\n\t"))
-}
-"""
-    
-    try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+    let source =    """
+                    \(header)
+                    private func color(named name: String) -> UIColor {
+                        return UIColor(named: name, in: Bundle(for: Dummy.self), compatibleWith: nil) ?? .clear
+                    }
+                    public struct Color {
+                        \(colorList.joined(separator: "\n\t"))
+                    }
+                    """
+    try source.write(to: outputURL, atomically: true, encoding: .utf8)
 }
 
-private let shouldOptimizeByDate = true
+private func generateImages(imageNames: [String], outputURL: URL) throws {
+    print("Generating images ...")
+    
+    let imageList = imageNames.map { "public static let \($0) = image(named: \"\($0)\")" }
+    
+    let source =    """
+                    \(header)
+                    private func image(named name: String) -> UIImage? {
+                        return UIImage(named: name, in: Bundle(for: Dummy.self), compatibleWith: nil)
+                    }
+                    public struct Image {
+                        \(imageList.joined(separator: "\n\t"))
+                    }
+                    """
+    try source.write(to: outputURL, atomically: true, encoding: .utf8)
+}
+
+private func generateAssets(
+    outputFile: String,
+    outputFolder: String,
+    assetsFolder: String,
+    assetExtension: String,
+    generate: ([String], URL) throws -> Void)
+{
+    guard let sourcePath = ProcessInfo.processInfo.environment["SRCROOT"] else { return }
+    guard let url = URL(string: sourcePath + assetsFolder) else { return print("Assets not found") }
+    let outputURL = URL(fileURLWithPath: sourcePath + "/" + outputFolder + "/" + outputFile)
+    
+    do {
+        // Get the directory contents urls (including subfolders urls)
+        let directoryContents = try FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: nil, options: []
+        )
+        
+        let folders = directoryContents.filter { $0.pathExtension == assetExtension }
+        let names = folders.map { $0.deletingPathExtension().lastPathComponent }
+        
+        guard shouldOptimizeByDate else { return try generate(names, outputURL) }
+        
+        guard let sourceFileDate = fileModificationDate(url: outputURL) else { return print("Couldn't get \(outputFile) file date")}
+
+        
+        for url in folders {
+            guard let date = fileModificationDate(url: url) else { continue }
+            if date > sourceFileDate {
+                return try generate(names, outputURL)
+            }
+        }
+    } catch {
+        print(error)
+    }
+}
 
 struct Generate {
     
     static func all() {
         colors()
+        images()
     }
     
     static func colors() {
-        let source = "Colors.swift"
-        guard let sourcePath = ProcessInfo.processInfo.environment["SRCROOT"] else { return }
-        guard let url = URL(string: sourcePath + "/Lib/colors.xcassets") else { return print("Color assets not found") }
-        let sourceURL = URL(fileURLWithPath: sourcePath + "/Lib/Generated/\(source)")
-        guard let sourceFileDate = fileModificationDate(url: sourceURL) else { return print("Couldn't get \(source) file date")}
-
-        do {
-            // Get the directory contents urls (including subfolders urls)
-            let directoryContents = try FileManager.default.contentsOfDirectory(
-                at: url, includingPropertiesForKeys: nil, options: []
-            )
-            
-            let colorFolders = directoryContents.filter { $0.pathExtension == "colorset" }
-            guard shouldOptimizeByDate else { return try generateColors(folders: colorFolders, sourceURL: sourceURL) }
-            
-            for url in colorFolders {
-                guard let date = fileModificationDate(url: url) else { continue }
-                if date > sourceFileDate {
-                    return try generateColors(folders: colorFolders, sourceURL: sourceURL)
-                }
-            }
-        } catch {
-            print(error)
-        }
+        generateAssets(
+            outputFile: "Colors.swift",
+            outputFolder: "/Lib/Generated",
+            assetsFolder: "/Lib/Colors.xcassets",
+            assetExtension: "colorset",
+            generate: generateColors
+        )
+    }
+    
+    static func images() {
+        generateAssets(
+            outputFile: "Images.swift",
+            outputFolder: "/Lib/Generated",
+            assetsFolder: "/Lib/Images.xcassets",
+            assetExtension: "imageset",
+            generate: generateImages
+        )
     }
 }
 

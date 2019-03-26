@@ -1,13 +1,13 @@
 import Foundation
 
-private let shouldOptimizeByDate = false
-
+private let shouldOptimizeByDate = true
 
 private func fileModificationDate(url: URL) -> Date? {
     do {
         let attr = try FileManager.default.attributesOfItem(atPath: url.path)
         return attr[FileAttributeKey.modificationDate] as? Date
     } catch {
+        print(error)
         return nil
     }
 }
@@ -22,7 +22,7 @@ private var header: String {
         return  """
                 //Generated file, don't modify!
                 //Generated on \(date)
-                import Foundation
+                import UIKit
                 private class Dummy {}
                 """
     }
@@ -86,7 +86,6 @@ private func generateAssets(
         
         guard let sourceFileDate = fileModificationDate(url: outputURL) else { return print("Couldn't get \(outputFile) file date")}
 
-        
         for url in folders {
             guard let date = fileModificationDate(url: url) else { continue }
             if date > sourceFileDate {
@@ -101,29 +100,29 @@ private func generateAssets(
 struct Generate {
     
     static func all() {
-        colors()
-        images()
+        colors("/Lib")
+        images("/Lib")
+        images("/PassengerApp/App")
+        images("/DriverApp/App")
     }
     
-    static func colors() {
+    static func colors(_ folder: String) {
         generateAssets(
             outputFile: "Colors.swift",
-            outputFolder: "/Lib/Generated",
-            assetsFolder: "/Lib/Colors.xcassets",
+            outputFolder: "\(folder)/Generated",
+            assetsFolder: "\(folder)/Colors.xcassets",
             assetExtension: "colorset",
             generate: generateColors
         )
     }
     
-    static func images() {
+    static func images(_ folder: String) {
         generateAssets(
             outputFile: "Images.swift",
-            outputFolder: "/Lib/Generated",
-            assetsFolder: "/Lib/Images.xcassets",
+            outputFolder: "\(folder)/Generated",
+            assetsFolder: "\(folder)/Images.xcassets",
             assetExtension: "imageset",
             generate: generateImages
         )
     }
 }
-
-
